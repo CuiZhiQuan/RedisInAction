@@ -119,4 +119,106 @@ public class Main {
         }
         return false;
     }
+
+    /**
+     * 创建状态消息
+     * @param conn
+     * @param uid
+     * @param message
+     * @return
+     */
+    public long createStatus(Jedis conn,long uid,String message){
+        return createStatus(conn, uid, message,null);
+    }
+
+    /**
+     * 创建状态消息
+     * @param conn
+     * @param uid
+     * @param message
+     * @param data
+     * @return
+     */
+    public long createStatus(Jedis conn,long uid,String message,Map<String,String> data){
+        Transaction trans = conn.multi();
+        trans.hget("user:" + uid,"login");
+        trans.incr("status:id:");
+        List<Object> response = trans.exec();
+        String login = (String)response.get(0);
+        long id = (Long)response.get(1);
+        if(Objects.isNull(login)){
+            return -1;
+        }
+        if(Objects.isNull(data)){
+            data = new HashMap<>(2);
+        }
+        data.put("message",message);
+        data.put("posted",String.valueOf(System.currentTimeMillis()));
+        data.put("id",String.valueOf(id));
+        data.put("uid",String.valueOf(uid));
+        data.put("login",login);
+
+        trans = conn.multi();
+        trans.hmset("status:" + id,data);
+        trans.hincrBy("user:" + uid,"posts",1);
+        trans.exec();
+        return id;
+    }
+
+    /**
+     * 根据时间线获取状态消息
+     * @param conn
+     * @param uid
+     * @return
+     */
+    public List<Map<String,String>> getStatusMessage(Jedis conn,long uid){
+        return getStatusMessage(conn, uid,0,30);
+    }
+
+    /**
+     * 根据时间线获取状态消息
+     * @param conn
+     * @param uid
+     * @param page
+     * @param count
+     * @return
+     */
+    public List<Map<String,String>> getStatusMessage(Jedis conn,long uid,int page,int count){
+        Set<String> statusIds = conn.zrevrange("home:" + uid, page * count, page * count - 1);
+        Transaction trans = conn.multi();
+        for(String id : statusIds){
+            trans.hgetAll("status:" + id);
+        }
+        List<Map<String,String>> statuses = new LinkedList<>();
+        for(Object result : trans.exec()){
+            Map<String,String> status = (Map<String, String>)result;
+            if(Objects.nonNull(status) && status.size() > 0){
+                statuses.add(status);
+            }
+        }
+        return statuses;
+    }
+
+    /**
+     * 关注某个用户
+     * @param conn
+     * @param uid
+     * @param otherUid
+     * @return
+     */
+    public boolean followUser(Jedis conn,long uid,long otherUid){
+        String followingKey = "following:" + uid;
+        String followerKey = "followers:" + otherUid;
+        Double score = conn.zscore(followingKey,String.valueOf(otherUid));
+        if(Objects.nonNull(score)){
+            return false;
+        }
+        long now = System.currentTimeMillis();
+        Transaction trans = conn.multi();
+        trans.zadd(followingKey,now,String.valueOf(otherUid));
+        trans.zadd(followerKey, now, String.valueOf(uid));
+        trans.zcard(followingKey);
+        trans.zcard(followerKey);
+        return false;
+    }
 }
