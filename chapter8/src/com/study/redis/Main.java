@@ -2,21 +2,20 @@ package com.study.redis;
 
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.Transaction;
+import redis.clients.jedis.Tuple;
 
 import java.util.*;
 
 /**
  * @author cuizhiquan
- * @Description
+ * @Description 第八章：构建简单的社交网站
  * @date 2018/5/8 23:14
  * @Copyright (c) 2017, DaChen All Rights Reserved.
  */
 public class Main {
 
-    /**
-     * 第八章：构建简单的社交网站
-     * @param args
-     */
+    private static int HOME_TIMELINE_SIZE = 1000;
+
     public static void main(String[] args) {
         new Main().run();
     }
@@ -219,6 +218,63 @@ public class Main {
         trans.zadd(followerKey, now, String.valueOf(uid));
         trans.zcard(followingKey);
         trans.zcard(followerKey);
+        trans.zrevrangeWithScores("profile:" + otherUid,0,HOME_TIMELINE_SIZE-1);
+
+        List<Object> response = trans.exec();
+        long following = (Long)response.get(response.size() - 3);
+        long followers = (Long) response.get(response.size() - 2);
+        Set<Tuple> statuses = (Set<Tuple>)response.get(response.size() - 1);
+
+        trans = conn.multi();
+        trans.hset("user:" + uid, "following", String.valueOf(following));
+        trans.hset("user:" + otherUid, "followers", String.valueOf(followers));
+
+        if (statuses.size() > 0) {
+            for (Tuple status : statuses){
+                trans.zadd("home:" + uid, status.getScore(), status.getElement());
+            }
+        }
+        trans.zremrangeByRank("home:" + uid, 0, 0 - HOME_TIMELINE_SIZE - 1);
+        trans.exec();
         return false;
+    }
+
+    /**
+     * 取消关注某个用户
+     * @param conn
+     * @param uid
+     * @param otherUid
+     * @return
+     */
+    public boolean unfollowUser(Jedis conn,long uid,long otherUid){
+        String followingKey = "following:" + uid;
+        String followerKey = "follower:" + otherUid;
+
+        Double score = conn.zscore(followingKey,String.valueOf(otherUid));
+        if(Objects.isNull(score)){
+            return false;
+        }
+
+        Transaction trans = conn.multi();
+        trans.zrem(followingKey,String.valueOf(otherUid));
+        trans.zrem(followerKey,String.valueOf(uid));
+        trans.zcard(followingKey);
+        trans.zcard(followerKey);
+        trans.zrevrange("profile:" + otherUid,0,HOME_TIMELINE_SIZE -1);
+        List<Object> response = trans.exec();
+        long following = (Long)response.get(response.size() - 3);
+        long follower = (Long)response.get(response.size() - 2);
+        Set<String> statuses = (Set<String>)response.get(response.size() - 1);
+
+        trans = conn.multi();
+        trans.hset("user:" + uid,"following",String.valueOf(following));
+        trans.hset("user:" + otherUid,"follower",String.valueOf(follower));
+        if(statuses.size() > 0){
+            for(String status : statuses){
+                trans.zrem("home:" + uid,status);
+            }
+        }
+        trans.exec();
+        return true;
     }
 }
