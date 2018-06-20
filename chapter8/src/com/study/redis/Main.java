@@ -4,6 +4,7 @@ import redis.clients.jedis.Jedis;
 import redis.clients.jedis.Transaction;
 import redis.clients.jedis.Tuple;
 
+import java.lang.reflect.Method;
 import java.util.*;
 
 /**
@@ -15,6 +16,8 @@ import java.util.*;
 public class Main {
 
     private static int HOME_TIMELINE_SIZE = 1000;
+
+    private static int POSTS_PER_PASS = 1000;
 
     public static void main(String[] args) {
         new Main().run();
@@ -276,5 +279,104 @@ public class Main {
         }
         trans.exec();
         return true;
+    }
+
+    /**
+     * 发布状态消息 更新个人时间线
+     * @param conn
+     * @param uid
+     * @param message
+     * @return
+     */
+    public long postStatus(Jedis conn,long uid,String message){
+        return this.postStatus(conn, uid, message,null);
+    }
+
+    /**
+     * 发布状态消息 更新个人时间线
+     * @param conn
+     * @param uid
+     * @param message
+     * @param data
+     * @return
+     */
+    public long postStatus(Jedis conn,long uid,String message,Map<String,String> data){
+        long id = this.createStatus(conn,uid,message,data);
+        if(Objects.equals(id,-1L)){
+            return -1;
+        }
+        String postedString = conn.hget("status:" + id,"posted");
+        if(Objects.isNull(postedString)){
+            return -1;
+        }
+        long posted = Long.parseLong(postedString);
+        conn.zadd("profile:" + uid,posted,String.valueOf(id));
+        this.syndicateStatus(conn,uid,id,posted,0);
+        return id;
+    }
+
+    /**
+     * 更新关注者时间线
+     * @param conn
+     * @param uid
+     * @param postId
+     * @param postTime
+     * @param start
+     */
+    public void syndicateStatus(Jedis conn,long uid,long postId,long postTime,double start) {
+        Set<Tuple> followers = conn.zrangeByScoreWithScores("followers:" + uid, String.valueOf(start), "inf", 0, POSTS_PER_PASS);
+        Transaction trans = conn.multi();
+        for (Tuple tuple : followers) {
+            String follower = tuple.getElement();
+            start = tuple.getScore();
+            trans.zadd("home:" + follower, postTime, String.valueOf(postId));
+            trans.zrange("home:" + follower, 0, -1);
+            trans.zremrangeByRank("home:" + follower, 0, 0 - HOME_TIMELINE_SIZE - 1);
+        }
+        trans.exec();
+
+        if (followers.size() >= POSTS_PER_PASS) {
+            try {
+                Method method = getClass().getDeclaredMethod(
+                        "syndicateStatus", Jedis.class, Long.TYPE, Long.TYPE, Long.TYPE, Double.TYPE);
+                executeLater("default", method, uid, postId, postTime, start);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    public void executeLater(String queue, Method method, Object... args) {
+            MethodThread thread = new MethodThread(this, method, args);
+            thread.start();
+    }
+
+    public class MethodThread extends Thread
+    {
+        private Object instance;
+        private Method method;
+        private Object[] args;
+
+        public MethodThread(Object instance, Method method, Object... args) {
+            this.instance = instance;
+            this.method = method;
+            this.args = args;
+        }
+
+        @Override
+        public void run() {
+            Jedis conn = new Jedis("localhost");
+            conn.select(15);
+
+            Object[] args = new Object[this.args.length + 1];
+            System.arraycopy(this.args, 0, args, 1, this.args.length);
+            args[0] = conn;
+
+            try{
+                method.invoke(instance, args);
+            }catch(Exception e){
+                throw new RuntimeException(e);
+            }
+        }
     }
 }
