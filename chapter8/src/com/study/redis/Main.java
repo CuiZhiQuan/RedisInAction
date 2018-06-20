@@ -346,6 +346,71 @@ public class Main {
         }
     }
 
+    /**
+     * 删除状态消息
+     * @param conn
+     * @param uid
+     * @param statusId
+     * @return
+     */
+    public boolean deleteStatus(Jedis conn,long uid,long statusId){
+        String key = "status:" + statusId;
+        String lock = this.acquireLockWithTimeout(conn, key, 1, 10);
+        if (Objects.isNull(lock)) {
+            return false;
+        }
+        try{
+            if (!String.valueOf(uid).equals(conn.hget(key, "uid"))) {
+                return false;
+            }
+            Transaction trans = conn.multi();
+            trans.del(key);
+            trans.zrem("profile:" + uid, String.valueOf(statusId));
+            trans.zrem("home:" + uid, String.valueOf(statusId));
+            trans.hincrBy("user:" + uid, "posts", -1);
+            trans.exec();
+            return true;
+        }finally{
+            releaseLock(conn, key, lock);
+        }
+    }
+
+    /**
+     * 获取状态消息
+     * @param conn
+     * @param uid
+     * @return
+     */
+    public List<Map<String,String>> getStatusMessages(Jedis conn, long uid) {
+        return getStatusMessages(conn, uid, 1, 30);
+    }
+
+    /**
+     * 获取状态消息
+     * @param conn
+     * @param uid
+     * @param page
+     * @param count
+     * @return
+     */
+    public List<Map<String,String>> getStatusMessages(Jedis conn, long uid, int page, int count)
+    {
+        Set<String> statusIds = conn.zrevrange("home:" + uid, (page - 1) * count, page * count - 1);
+
+        Transaction trans = conn.multi();
+        for (String id : statusIds) {
+            trans.hgetAll("status:" + id);
+        }
+        List<Map<String,String>> statuses = new ArrayList<>();
+        for (Object result : trans.exec()) {
+            Map<String,String> status = (Map<String,String>)result;
+            if (Objects.nonNull(status) && status.size() > 0){
+                statuses.add(status);
+            }
+        }
+        return statuses;
+    }
+
     public void executeLater(String queue, Method method, Object... args) {
             MethodThread thread = new MethodThread(this, method, args);
             thread.start();
