@@ -1,4 +1,4 @@
-package com.study.redis;
+package com.study.chapter8;
 
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.Transaction;

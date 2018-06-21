@@ -7,6 +7,13 @@
     <groupId>com.study.redis</groupId>
     <artifactId>RedisInAction</artifactId>
     <version>1.0</version>
+    <modules>
+        <module>chapter9</module>
+        <module>chapter9</module>
+    </modules>
+    <packaging>pom</packaging>
+    <name>RedisInAction</name>
+    <description>RedisInAction</description>
 
     <dependencies>
         <dependency>
